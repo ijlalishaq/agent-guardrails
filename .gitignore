@@ -3,3 +3,5 @@ evals-out/
 *.log
 .env
 .DS_Store
+demo-audit.jsonl
+STOP

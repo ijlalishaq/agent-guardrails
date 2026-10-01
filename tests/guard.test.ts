@@ -123,6 +123,43 @@ describe("Guard", () => {
     expect(await g.check({ id: "1", name: "get_balance", input: {} })).toMatchObject({ allowed: false, code: "killed" });
   });
 
+  it("blocks the call when a rule or the approver throws", async () => {
+    const badRule = guard({ rules: { pay: [() => { throw new Error("rates service down"); }] } });
+    expect(await badRule.check({ id: "1", name: "pay", input: { to: "acme", amount: 10 } })).toMatchObject({
+      allowed: false,
+      code: "rule",
+      reason: "rule failed: rates service down",
+    });
+
+    const flaky = { decide: async () => { throw new Error("slack timeout"); } };
+    expect(await guard({}, flaky).check({ id: "2", name: "pay", input: { to: "acme", amount: 10 } })).toMatchObject({
+      allowed: false,
+      code: "approval_denied",
+      reason: expect.stringMatching(/slack timeout/),
+    });
+  });
+
+  it("asks for approval when needsApproval throws, and gives it the validated input", async () => {
+    let asked = 0;
+    const counting = { decide: async () => (asked++, { approved: true, by: "test" }) };
+    const seen: unknown[] = [];
+    const g = guard(
+      {
+        needsApproval: (call) => {
+          seen.push(call.input);
+          if (call.name === "get_balance") throw new Error("bug");
+          return false;
+        },
+      },
+      counting,
+    );
+    await g.check({ id: "1", name: "pay", input: { to: "acme", amount: 10, extra: "dropped by zod" } });
+    expect(asked).toBe(0);
+    await g.check({ id: "2", name: "get_balance", input: {} });
+    expect(asked).toBe(1);
+    expect(seen[0]).toEqual({ to: "acme", amount: 10 });
+  });
+
   it("writes every decision to the audit log", async () => {
     const audit = new AuditLog("run-1");
     const g = new Guard(policy(), tools, denyAll, audit);

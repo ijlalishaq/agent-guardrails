@@ -1,7 +1,7 @@
 // pnpm demo            offline: a scripted agent that tries to refund too much
 // pnpm demo --claude   the same task with Claude (needs ANTHROPIC_API_KEY or `ant auth login`)
 //
-// Refunds over 20 are approved on the terminal; the audit log is written to demo-audit.jsonl.
+// Refunds over 20 are approved on the terminal; the audit log is appended to demo-audit.jsonl.
 import { z } from "zod";
 import {
   AnthropicModel,
@@ -49,7 +49,7 @@ const policy: Policy = {
       ({ orderId, amount }) => (amount > (orders.get(orderId)?.total ?? 0) ? "more than the order total" : null),
     ],
   },
-  needsApproval: (call) => call.name === "refund" && ((call.input as { amount?: number })?.amount ?? 0) > 20,
+  needsApproval: (call) => call.name === "refund" && call.input.amount > 20,
   budgets: { maxSteps: 8, maxToolCalls: 6, maxCostUsd: 0.25 },
   maxBlockedCalls: 2,
 };
@@ -63,7 +63,8 @@ const model = useClaude
       { call: [{ name: HANDOFF_TOOL, input: { reason: "A-1002 wants 240 back, over my limit." } }] },
     ]);
 
-const audit = AuditLog.toFile("demo", "demo-audit.jsonl");
+// Runs append to the same file; each gets its own id so `pnpm audit:verify demo-audit.jsonl` checks them separately.
+const audit = AuditLog.toFile(`demo-${new Date().toISOString()}`, "demo-audit.jsonl");
 const result = await runAgent("Sam says order A-1002 never arrived and wants the full 240 back. Sort it out.", {
   model,
   tools,

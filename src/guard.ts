@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Approver } from "./approvals.js";
+import type { ApprovalDecision, Approver } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { KillSwitch } from "./kill-switch.js";
 import { needsApproval, type Policy } from "./policy.js";
@@ -99,8 +99,14 @@ export class Guard {
       return block("invalid_args", issues.join("; "));
     }
 
+    // A rule, approval check or approver that throws blocks the call: the guard fails closed.
     for (const rule of this.policy.rules?.[call.name] ?? []) {
-      const reason = rule(parsed.data);
+      let reason: string | null;
+      try {
+        reason = rule(parsed.data);
+      } catch (err) {
+        reason = `rule failed: ${errorMessage(err)}`;
+      }
       if (reason) return block("rule", reason);
     }
 
@@ -108,7 +114,14 @@ export class Guard {
       return block("budget", `${this.policy.budgets.maxToolCalls} tool calls used`);
     }
 
-    if (needsApproval(this.policy, call, tool)) {
+    const checked = { ...call, input: parsed.data };
+    let ask: boolean;
+    try {
+      ask = needsApproval(this.policy, checked, tool);
+    } catch {
+      ask = true;
+    }
+    if (ask) {
       const request = {
         runId: this.audit.runId,
         task: this.policy.task,
@@ -116,7 +129,12 @@ export class Guard {
         tool: call.name,
         input: parsed.data,
       };
-      const answer = await this.approver.decide(request);
+      let answer: ApprovalDecision;
+      try {
+        answer = await this.approver.decide(request);
+      } catch (err) {
+        answer = { approved: false, by: "approver", note: `approver failed: ${errorMessage(err)}` };
+      }
       this.audit.append("approval", { callId: call.id, tool: call.name, ...answer });
       if (!answer.approved) {
         return block("approval_denied", `${answer.by} declined${answer.note ? `: ${answer.note}` : ""}`);
@@ -130,4 +148,8 @@ export class Guard {
 
 function block(code: BlockCode, reason: string): Decision {
   return { allowed: false, code, reason };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

@@ -17,6 +17,9 @@ export interface Budgets {
  */
 export type ArgRule = (input: any) => string | null;
 
+/** A tool call whose input has passed the tool's schema. */
+export type CheckedCall = Omit<ToolCall, "input"> & { input: any };
+
 export interface Policy {
   /** What this run is for. Shown to the model and written to the audit log. */
   task: string;
@@ -25,15 +28,18 @@ export interface Policy {
   /** Tools this task may use. Anything else is blocked, even if the agent has it. */
   allowedTools: string[];
   rules?: Record<string, ArgRule[]>;
-  /** Which calls need a person to approve them first. Defaults to every write tool. */
-  needsApproval?: (call: ToolCall, tool: AnyTool) => boolean;
+  /**
+   * Which calls need a person to approve them first. Defaults to every write tool. Like rules,
+   * it sees the validated input. If it throws, the call goes to the approver.
+   */
+  needsApproval?: (call: CheckedCall, tool: AnyTool) => boolean;
   budgets: Budgets;
   /** Hand the run to the owner after this many blocked calls. */
   maxBlockedCalls: number;
 }
 
-export const writesNeedApproval = (_call: ToolCall, tool: AnyTool) => tool.effect === "write";
+export const writesNeedApproval = (_call: CheckedCall, tool: AnyTool) => tool.effect === "write";
 
-export function needsApproval(policy: Policy, call: ToolCall, tool: AnyTool): boolean {
+export function needsApproval(policy: Policy, call: CheckedCall, tool: AnyTool): boolean {
   return (policy.needsApproval ?? writesNeedApproval)(call, tool);
 }

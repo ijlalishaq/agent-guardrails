@@ -47,7 +47,7 @@ function supportPolicy(w: World, over: Partial<Policy> = {}): Policy {
     allowedTools: ["list_tickets", "read_ticket", "reply_ticket", "issue_refund"],
     rules: { issue_refund: refundRules },
     // Replies go out on their own; any refund over 20 needs the support lead.
-    needsApproval: (call) => call.name === "issue_refund" && ((call.input as { amount?: number })?.amount ?? 0) > 20,
+    needsApproval: (call) => call.name === "issue_refund" && call.input.amount > 20,
     budgets: { maxSteps: 12, maxToolCalls: 10, maxTokens: 120_000, maxCostUsd: 0.5 },
     maxBlockedCalls: 3,
     ...over,

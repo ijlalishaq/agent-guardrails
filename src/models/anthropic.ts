@@ -15,7 +15,8 @@ export interface AnthropicOptions {
 /**
  * Claude through the Messages API. Server-side refusal fallbacks are on ("default" routing),
  * so a turn Claude declines for policy reasons is retried on a fallback model inside the
- * same request instead of ending the run.
+ * same request instead of ending the run. Automatic prompt caching is on as well, so each
+ * turn reads the conversation so far from cache and only pays full price for what's new.
  */
 export class AnthropicModel implements ChatModel {
   readonly name: string;
@@ -34,6 +35,8 @@ export class AnthropicModel implements ChatModel {
       max_tokens: this.options.maxTokens ?? 16000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
+      // The loop resends the whole conversation each turn, so cache the growing prefix.
+      cache_control: { type: "ephemeral" },
       ...(this.options.effort ? { output_config: { effort: this.options.effort } } : {}),
       system: request.system,
       tools: request.tools.map((t) => ({
@@ -56,8 +59,10 @@ export class AnthropicModel implements ChatModel {
       text,
       toolCalls,
       usage: {
-        inputTokens: u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+        inputTokens: u.input_tokens,
         outputTokens: u.output_tokens,
+        cacheReadTokens: u.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
       },
       stop: stopOf(response.stop_reason, toolCalls.length > 0),
       raw: response.content,

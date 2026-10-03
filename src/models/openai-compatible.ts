@@ -1,4 +1,4 @@
-import type { ChatModel, Message, ModelRequest, ModelTurn } from "./types.js";
+import type { ChatModel, Message, ModelRequest, ModelTurn, Usage } from "./types.js";
 
 export interface OpenAICompatibleOptions {
   model: string;
@@ -17,7 +17,7 @@ interface ChatCompletion {
       tool_calls?: { id: string; function: { name: string; arguments: string } }[];
     };
   }[];
-  usage?: { prompt_tokens: number; completion_tokens: number };
+  usage?: { prompt_tokens: number; completion_tokens: number; prompt_tokens_details?: { cached_tokens?: number } };
 }
 
 /**
@@ -61,10 +61,22 @@ export class OpenAICompatibleModel implements ChatModel {
     return {
       text: choice.message.content ?? "",
       toolCalls,
-      usage: { inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0 },
-      stop: choice.finish_reason === "length" ? "max_tokens" : toolCalls.length ? "tool_calls" : "end",
+      usage: usageOf(body.usage),
+      stop: stopOf(choice.finish_reason, toolCalls.length > 0),
     };
   }
+}
+
+function usageOf(u: ChatCompletion["usage"]): Usage {
+  // prompt_tokens includes the cached ones; split them out so they're priced as cache reads.
+  const cached = u?.prompt_tokens_details?.cached_tokens ?? 0;
+  return { inputTokens: (u?.prompt_tokens ?? 0) - cached, outputTokens: u?.completion_tokens ?? 0, cacheReadTokens: cached };
+}
+
+function stopOf(reason: string, hasCalls: boolean): ModelTurn["stop"] {
+  if (reason === "length") return "max_tokens";
+  if (reason === "content_filter") return "refusal";
+  return hasCalls ? "tool_calls" : "end";
 }
 
 function parseJson(s: string): unknown {

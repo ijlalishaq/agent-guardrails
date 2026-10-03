@@ -125,4 +125,41 @@ describe("runAgent", () => {
     expect(verifyChain(tampered)).toEqual({ ok: false, brokenAt: 2 });
     expect(verifyChain(audit.entries.filter((_, i) => i !== 3))).toEqual({ ok: false, brokenAt: 3 });
   });
+
+  it("stops cleanly when the model call fails", async () => {
+    const { tools, policy } = setup();
+    const audit = new AuditLog("r2");
+    const model = { name: "broken", complete: async () => { throw new Error("overloaded"); } };
+    const r = await runAgent("Go", { model, tools, policy, audit });
+    expect(r).toMatchObject({ status: "stopped", reason: "model error: overloaded" });
+    expect(audit.entries.at(-1)?.type).toBe("run_finished");
+  });
+
+  it("doesn't run tool calls from a turn cut off by the output limit", async () => {
+    const { sent, tools, policy } = setup();
+    const model = {
+      name: "scripted",
+      complete: async () => ({
+        text: "",
+        toolCalls: [{ id: "c1", name: "email", input: { text: "Dear cust" } }],
+        usage: { inputTokens: 10, outputTokens: 10 },
+        stop: "max_tokens" as const,
+      }),
+    };
+    const r = await runAgent("Email them", { model, tools, policy, approver: approveAll });
+    expect(r).toMatchObject({ status: "stopped", reason: "the model hit its output limit" });
+    expect(sent).toEqual([]);
+  });
+
+  it("cuts long tool output before the model sees it", async () => {
+    const { policy } = setup();
+    const big = defineTool({ name: "lookup", description: "", effect: "read", input: z.object({}), run: () => "x".repeat(500) });
+    let seen = "";
+    const model = new ScriptedModel([
+      { call: [{ name: "lookup", input: {} }] },
+      (results) => ((seen = results[0]!.content), { say: "done" }),
+    ]);
+    await runAgent("Go", { model, tools: [big], policy, maxResultChars: 100 });
+    expect(seen).toBe(`${"x".repeat(100)}\n[cut: 400 more characters]`);
+  });
 });

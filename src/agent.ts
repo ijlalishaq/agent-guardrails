@@ -3,7 +3,7 @@ import { denyAll, type Approver } from "./approvals.js";
 import { AuditLog } from "./audit.js";
 import { FATAL, Guard, type BlockCode, type Spend } from "./guard.js";
 import type { KillSwitch } from "./kill-switch.js";
-import type { ChatModel, Message, ToolResult } from "./models/types.js";
+import { totalTokens, type ChatModel, type Message, type ModelTurn, type ToolResult } from "./models/types.js";
 import type { Policy } from "./policy.js";
 import { costOf } from "./pricing.js";
 import { toolSpec, type AnyTool, type ToolSpec } from "./tools.js";
@@ -33,6 +33,8 @@ export interface RunOptions {
   runId?: string;
   /** Extra instructions appended to the built-in system prompt. */
   instructions?: string;
+  /** Tool output longer than this is cut before the model sees it. Defaults to 20,000 characters. */
+  maxResultChars?: number;
 }
 
 export type RunStatus = "completed" | "handed_off" | "stopped";
@@ -64,7 +66,7 @@ export function systemPrompt(policy: Policy, instructions?: string): string {
 }
 
 export async function runAgent(goal: string, opts: RunOptions): Promise<RunResult> {
-  const runId = opts.runId ?? randomUUID();
+  const runId = opts.runId ?? opts.audit?.runId ?? randomUUID();
   const audit = opts.audit ?? new AuditLog(runId);
   const guard = new Guard(opts.policy, opts.tools, opts.approver ?? denyAll, audit, opts.killSwitch);
   const system = systemPrompt(opts.policy, opts.instructions);
@@ -77,6 +79,7 @@ export async function runAgent(goal: string, opts: RunOptions): Promise<RunResul
   const executed: RunResult["executed"] = [];
   const blocked: RunResult["blocked"] = [];
   let finalText = "";
+  const maxChars = opts.maxResultChars ?? 20_000;
 
   audit.append("run_started", { goal, task: opts.policy.task, owner: opts.policy.owner, model: opts.model.name });
 
@@ -90,17 +93,22 @@ export async function runAgent(goal: string, opts: RunOptions): Promise<RunResul
     const stop = guard.beforeModelCall();
     if (stop) return finish("stopped", stop);
 
-    const turn = await opts.model.complete({ system, messages, tools });
-    const { inputTokens, outputTokens } = turn.usage;
-    guard.recordModelCall(inputTokens + outputTokens, costOf(opts.model.name, inputTokens, outputTokens));
+    let turn: ModelTurn;
+    try {
+      turn = await opts.model.complete({ system, messages, tools });
+    } catch (err) {
+      // The SDKs already retry transient failures, so an error here ends the run, logged.
+      return finish("stopped", `model error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    guard.recordModelCall(totalTokens(turn.usage), costOf(opts.model.name, turn.usage));
     audit.append("model_call", { stop: turn.stop, text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage });
     finalText = turn.text || finalText;
     messages.push({ role: "assistant", text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
 
     if (turn.stop === "refusal") return finish("stopped", "the model declined the request");
-    if (turn.toolCalls.length === 0) {
-      return turn.stop === "max_tokens" ? finish("stopped", "the model hit its output limit") : finish("completed");
-    }
+    // A turn cut off by the output limit can end in a half-written tool call. Don't run any of it.
+    if (turn.stop === "max_tokens") return finish("stopped", "the model hit its output limit");
+    if (turn.toolCalls.length === 0) return finish("completed");
 
     const results: ToolResult[] = [];
     let handoff: string | undefined;
@@ -130,7 +138,7 @@ export async function runAgent(goal: string, opts: RunOptions): Promise<RunResul
       const tool = guard.tool(call.name)!;
       try {
         const output = await tool.run(decision.input);
-        const content = typeof output === "string" ? output : JSON.stringify(output ?? null);
+        const content = clip(typeof output === "string" ? output : JSON.stringify(output ?? null), maxChars);
         executed.push({ tool: call.name, input: decision.input, approvedBy: decision.approvedBy });
         audit.append("tool_result", { callId: call.id, tool: call.name, ok: true, output: content });
         results.push({ callId: call.id, content, isError: false });
@@ -144,4 +152,9 @@ export async function runAgent(goal: string, opts: RunOptions): Promise<RunResul
     messages.push({ role: "tool", results });
     if (handoff) return finish("handed_off", handoff);
   }
+}
+
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n[cut: ${text.length - max} more characters]`;
 }

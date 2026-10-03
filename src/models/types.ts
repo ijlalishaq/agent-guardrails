@@ -1,9 +1,18 @@
 import type { ToolCall, ToolSpec } from "../tools.js";
 
 export interface Usage {
+  /** Prompt tokens billed at the normal rate. */
   inputTokens: number;
   outputTokens: number;
+  /** Prompt tokens served from the provider's cache. */
+  cacheReadTokens?: number;
+  /** Prompt tokens written to the provider's cache. */
+  cacheWriteTokens?: number;
 }
+
+/** Every token the call processed, cached or not. This is what token budgets count. */
+export const totalTokens = (u: Usage) =>
+  u.inputTokens + u.outputTokens + (u.cacheReadTokens ?? 0) + (u.cacheWriteTokens ?? 0);
 
 export interface ToolResult {
   callId: string;

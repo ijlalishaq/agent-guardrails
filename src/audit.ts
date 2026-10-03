@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 export type AuditType =
@@ -47,6 +47,11 @@ export class AuditLog {
     return new AuditLog(runId, (line) => appendFileSync(path, line + "\n"));
   }
 
+  /** Hash of the latest entry. Store it somewhere else to detect lines cut off the end. */
+  get head(): string {
+    return this.entries.at(-1)?.hash ?? GENESIS;
+  }
+
   append(type: AuditType, data: Record<string, unknown>): AuditEntry {
     const prev = this.entries.at(-1);
     const base = {
@@ -64,6 +69,10 @@ export class AuditLog {
   }
 }
 
+/**
+ * Checks that every entry links to the one before it. On its own this can't tell that entries
+ * were removed from the end; compare the last hash with a `head` you kept elsewhere for that.
+ */
 export function verifyChain(entries: AuditEntry[]): { ok: true } | { ok: false; brokenAt: number } {
   let prevHash = GENESIS;
   for (const [i, e] of entries.entries()) {
@@ -71,4 +80,15 @@ export function verifyChain(entries: AuditEntry[]): { ok: true } | { ok: false; 
     prevHash = e.hash;
   }
   return { ok: true };
+}
+
+/** Reads a JSONL audit file and groups its entries by run, in file order. */
+export function readAuditFile(path: string): Map<string, AuditEntry[]> {
+  const runs = new Map<string, AuditEntry[]>();
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const entry = JSON.parse(line) as AuditEntry;
+    runs.set(entry.runId, [...(runs.get(entry.runId) ?? []), entry]);
+  }
+  return runs;
 }

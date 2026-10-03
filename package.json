@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "eval": "tsx evals/cli.ts",
     "eval:gate": "tsx evals/cli.ts --gate",
-    "demo": "tsx examples/support-desk.ts"
+    "demo": "tsx examples/support-desk.ts",
+    "audit:verify": "tsx scripts/verify-audit.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.128.0",

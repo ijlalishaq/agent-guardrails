@@ -46,15 +46,19 @@ function makeModel(spec: string): ChatModel | null {
   }
 }
 
+const repeat = Number(values.repeat);
+if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`--repeat must be a positive integer, got "${values.repeat}"`);
 const model = makeModel(values.model!);
 const label = model?.name ?? "scripted";
 const wanted = values.only?.split(",");
+const unknown = wanted?.filter((id) => !scenarios.some((s) => s.id === id)) ?? [];
+if (unknown.length) throw new Error(`unknown scenario: ${unknown.join(", ")}`);
 const selected = scenarios.filter((s) => !wanted || wanted.includes(s.id));
 const outDir = join(values.out!, label.replace(/[:/]/g, "_"));
 mkdirSync(outDir, { recursive: true });
 
 const results: ScenarioResult[] = [];
-for (let round = 0; round < Number(values.repeat); round++) {
+for (let round = 0; round < repeat; round++) {
   for (const s of selected) {
     const r = await runScenario(s, model, join(outDir, "audit", String(round)));
     results.push(r);
